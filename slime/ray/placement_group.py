@@ -12,7 +12,7 @@ from .utils import add_default_ray_env_vars
 logger = logging.getLogger(__name__)
 
 
-@ray.remote(num_gpus=1)
+@ray.remote
 class InfoActor:
     def get_ip_and_gpu_id(self):
         return ray.util.get_node_ip_address(), ray.get_gpu_ids()[0]
@@ -39,13 +39,23 @@ def sort_key(x):
     return (node_ip_parts, gpu_id)
 
 
-def _create_placement_group(num_gpus):
+def _create_placement_group(num_gpus, strategy="PACK", enable_timeslice=False, rollout_offset=None):
     """Create a placement group with the specified number of GPUs."""
     if num_gpus == 0:
         return None, [], []
 
-    bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_gpus)]
-    pg = placement_group(bundles, strategy="PACK")
+    gpu_req = 0.01 if enable_timeslice else 1
+    node_resource_req = 0.01 if enable_timeslice else 1
+    bundles = []
+    for i in range(num_gpus):
+        bundle = {"GPU": gpu_req, "CPU": 1}
+        if rollout_offset is not None:
+            if i < rollout_offset:
+                bundle["trainers"] = node_resource_req
+            else:
+                bundle["samplers"] = node_resource_req
+        bundles.append(bundle)
+    pg = placement_group(bundles, strategy=strategy)
     num_bundles = len(bundles)
 
     # Wait for the placement group to be scheduled. Poll rather than a bare
@@ -71,6 +81,7 @@ def _create_placement_group(num_gpus):
     for i in range(num_bundles):
         info_actors.append(
             InfoActor.options(
+                num_gpus=gpu_req,
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg,
                     placement_group_bundle_index=i,
@@ -82,7 +93,15 @@ def _create_placement_group(num_gpus):
         ray.kill(actor)
 
     bundle_infos = [(i, gpu_ids[i][0], gpu_ids[i][1]) for i in range(num_bundles)]
-    sorted_bundle_infos = sorted(bundle_infos, key=sort_key)
+    if rollout_offset is not None:
+        trainer_bundles = bundle_infos[:rollout_offset]
+        rollout_bundles = bundle_infos[rollout_offset:]
+        sorted_trainer = sorted(trainer_bundles, key=sort_key)
+        sorted_rollout = sorted(rollout_bundles, key=sort_key)
+        sorted_bundle_infos = sorted_trainer + sorted_rollout
+    else:
+        sorted_bundle_infos = sorted(bundle_infos, key=sort_key)
+
     pg_reordered_bundle_indices = [info[0] for info in sorted_bundle_infos]
     # Map from logical index -> physical GPU ID
     pg_reordered_gpu_ids = [gpu_ids[info[0]][1] for info in sorted_bundle_infos]
@@ -123,7 +142,11 @@ def create_placement_groups(args):
     num_gpus, rollout_offset = _get_placement_group_layout(args)
 
     logger.info(f"Creating placement group with {num_gpus} GPUs...")
-    pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids = _create_placement_group(num_gpus)
+    enable_ts = getattr(args, "enable_timeslice", False)
+    strategy = getattr(args, "placement_group_strategy", "PACK")
+    pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids = _create_placement_group(
+        num_gpus, strategy=strategy, enable_timeslice=enable_ts, rollout_offset=rollout_offset
+    )
     rollout_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[rollout_offset:]
     rollout_pg_reordered_gpu_ids = actor_pg_reordered_gpu_ids[rollout_offset:]
 

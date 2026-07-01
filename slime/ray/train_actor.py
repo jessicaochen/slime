@@ -46,6 +46,12 @@ class TrainRayActor(RayActor):
         # os.environ.pop("CUDA_VISIBLE_DEVICES", None)
         # os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0])
         os.environ["LOCAL_RANK"] = str(get_local_gpu_id())
+        logger.info(
+            f"[TimeSlice Runtime] TrainRayActor (rank={self._rank}, pid={os.getpid()}) "
+            f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}, "
+            f"RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO={os.environ.get('RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO')}, "
+            f"LOCAL_RANK={os.environ.get('LOCAL_RANK')}, ray.get_gpu_ids()={ray.get_gpu_ids()}"
+        )
 
     def init(self, args, role, with_ref=False, with_opd_teacher=False):
         self.args = args

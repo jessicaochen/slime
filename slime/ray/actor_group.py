@@ -1,3 +1,4 @@
+import logging
 import os
 
 import ray
@@ -5,6 +6,8 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
+
+logger = logging.getLogger(__name__)
 
 
 class RayTrainGroup:
@@ -58,8 +61,9 @@ class RayTrainGroup:
             "NCCL_CUMEM_ENABLE": os.environ.get("NCCL_CUMEM_ENABLE", "0"),
             "NVTE_FP8_BLOCK_SCALING_FP32_SCALES": os.environ.get("NVTE_FP8_BLOCK_SCALING_FP32_SCALES", "1"),
             **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
-            **self.args.train_env_vars,
         }
+
+
 
         if self.args.offload_train and self.args.train_backend == "megatron":
             import torch_memory_saver
@@ -94,9 +98,10 @@ class RayTrainGroup:
         else:
             actor_impl = self._actor_cls
 
+        enable_ts = getattr(self.args, "enable_timeslice", False)
+        gpu_req = 0.01 if enable_ts else 1
         actor_options = {
-            "num_gpus": 1,
-            "runtime_env": {"env_vars": add_default_ray_env_vars(env_vars)},
+            "num_gpus": gpu_req,
         }
         if getattr(self.args, "rollout_data_transport", "object-store") == "nixl":
             actor_options["enable_tensor_transport"] = True
@@ -106,13 +111,27 @@ class RayTrainGroup:
         self._actor_handlers = []
         master_addr, master_port = None, None
         for rank in range(world_size):
+            rank_env_vars = dict(env_vars)
+            if enable_ts:
+                # Resolve physical GPU ID for multi-GPU node support
+                phys_gpu = str(_reordered_gpu_ids[rank]) if _reordered_gpu_ids and len(_reordered_gpu_ids) > rank else "0"
+                rank_env_vars["CUDA_VISIBLE_DEVICES"] = phys_gpu
+            
+            final_env_vars = add_default_ray_env_vars(rank_env_vars)
+            logger.info(
+                f"[TimeSlice] Launching TrainRayActor (rank={rank}) with runtime_env env_vars: "
+                f"CUDA_VISIBLE_DEVICES={final_env_vars.get('CUDA_VISIBLE_DEVICES')}"
+            )
             actor = TrainRayActor.options(
                 num_cpus=num_gpus_per_actor,
-                num_gpus=num_gpus_per_actor,
+                num_gpus=gpu_req,
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg,
                     placement_group_bundle_index=reordered_bundle_indices[rank],
                 ),
+                runtime_env={
+                    "env_vars": final_env_vars,
+                },
             ).remote(world_size, rank, master_addr, master_port)
             if rank == 0:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())

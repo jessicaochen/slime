@@ -69,6 +69,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--placement-group-strategy",
+                type=str,
+                default="PACK",
+                choices=["PACK", "SPREAD", "STRICT_PACK", "STRICT_SPREAD"],
+                help="Ray placement group strategy to use for resource scheduling.",
+            )
+            parser.add_argument(
                 "--colocate",
                 action="store_true",
                 default=False,
@@ -102,6 +109,37 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
             reset_arg(parser, "--distributed-backend", type=str, default="nccl")
             reset_arg(parser, "--distributed-timeout-minutes", type=int, default=10)
+
+            parser.add_argument(
+                "--enable-timeslice",
+                action="store_true",
+                default=False,
+                help="Enable llm-d-rl-time-slicing cooperative GPU grant acquisition.",
+            )
+            parser.add_argument(
+                "--timeslice-orchestrator-addr",
+                type=str,
+                default="timeslice-acceleratororchestrator.timeslice-system.svc.cluster.local:50051",
+                help="Address of the Accelerator Orchestrator gRPC service.",
+            )
+            parser.add_argument(
+                "--timeslice-job-id",
+                type=str,
+                default=None,
+                help="Unique job identifier for the Accelerator Orchestrator.",
+            )
+            parser.add_argument(
+                "--timeslice-sampler-group",
+                type=str,
+                default="group-slime-sampler",
+                help="Accelerator Orchestrator time-slice group for rollout samplers.",
+            )
+            parser.add_argument(
+                "--timeslice-trainer-group",
+                type=str,
+                default="group-slime-trainer",
+                help="Accelerator Orchestrator time-slice group for trainer actors.",
+            )
 
             return parser
 

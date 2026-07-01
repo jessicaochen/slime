@@ -173,7 +173,8 @@ class ServerGroup:
                 continue
 
             global_rank = self.rank_offset + i
-            num_gpus = 0.2
+            enable_ts = getattr(self.args, "enable_timeslice", False)
+            num_gpus = 0.01 if enable_ts else 0.2
             num_cpus = num_gpus
 
             # Get the base GPU ID from placement group using gpu_offset.
@@ -200,12 +201,21 @@ class ServerGroup:
                     "SLIME_ENABLE_PROFILING": "true",
                 }.items()
             }
+            if enable_ts:
+                phys_gpu = str(reordered_gpu_ids[gpu_index]) if reordered_gpu_ids and len(reordered_gpu_ids) > gpu_index else "0"
+                env_vars["CUDA_VISIBLE_DEVICES"] = phys_gpu
+
+            final_env_vars = add_default_ray_env_vars(env_vars)
+            logger.info(
+                f"[TimeSlice] Launching RolloutRayActor (rank={global_rank}) with runtime_env env_vars: "
+                f"CUDA_VISIBLE_DEVICES={final_env_vars.get('CUDA_VISIBLE_DEVICES')}"
+            )
             rollout_engine = RolloutRayActor.options(
                 num_cpus=num_cpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
                 runtime_env={
-                    "env_vars": add_default_ray_env_vars(env_vars),
+                    "env_vars": final_env_vars,
                 },
             ).remote(
                 self.args,
@@ -226,7 +236,7 @@ class ServerGroup:
 
         # Compute base_port from the maximum cursor across all nodes that
         # this group's engines may land on (conservative: just use global max).
-        base_port = max(port_cursors.values()) if port_cursors else 15000
+        base_port = max(port_cursors.values()) if port_cursors else random.randint(15000, 25000)
         addr_and_ports, port_cursors = _allocate_rollout_engine_addr_and_ports_normal(
             args=self.args,
             rollout_engines=rollout_engines,
@@ -1137,7 +1147,9 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
             num_engines = group_cfg.num_gpus // num_gpu_per_engine_local
 
             group_abs_start = rollout_pg_offset + gpu_offset
-            needs_offload = args.offload_rollout and group_abs_start < megatron_num_gpus
+            needs_offload = args.offload_rollout and (
+                group_abs_start < megatron_num_gpus or getattr(args, "enable_timeslice", False)
+            )
             overrides = dict(group_cfg.overrides)
             if overrides_extra:
                 for k, v in overrides_extra.items():

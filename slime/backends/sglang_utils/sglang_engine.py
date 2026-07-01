@@ -4,6 +4,8 @@ import logging
 import multiprocessing
 import os
 import time
+
+import ray
 from urllib.parse import quote
 
 import requests
@@ -114,6 +116,12 @@ class SGLangEngine(RayActor):
         self.base_gpu_id = base_gpu_id
         self.sglang_overrides = sglang_overrides or {}
         self.num_gpus_per_engine = num_gpus_per_engine
+        logger.info(
+            f"[TimeSlice Runtime] SGLangEngine (rank={self.rank}, pid={os.getpid()}) "
+            f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}, "
+            f"RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO={os.environ.get('RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO')}, "
+            f"ray.get_gpu_ids()={ray.get_gpu_ids()}"
+        )
 
     def init(
         self,
@@ -144,6 +152,11 @@ class SGLangEngine(RayActor):
         ip_part, port_part = dist_init_addr.rsplit(":", 1)
         dist_init_addr = f"{_format_v6_uri(ip_part)}:{port_part}"
 
+        logger.info(
+            f"[TimeSlice Runtime] SGLangEngine.init (rank={self.rank}, pid={os.getpid()}) "
+            f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}, "
+            f"RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO={os.environ.get('RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO')}"
+        )
         server_args_dict, external_engine_need_check_fields = _compute_server_args(
             self.args,
             self.rank,

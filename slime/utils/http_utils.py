@@ -29,7 +29,9 @@ def is_port_available(port):
     """Return whether a port is available."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # DO NOT set SO_REUSEADDR here. If another process is bound to a specific IP on this port,
+            # setting SO_REUSEADDR would allow us to bind to the wildcard address ("") on the same port,
+            # leading to false positives and a subsequent bind failure during actual server startup.
             s.bind(("", port))
             s.listen(1)
             return True
