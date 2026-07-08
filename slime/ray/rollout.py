@@ -1137,7 +1137,9 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
             num_engines = group_cfg.num_gpus // num_gpu_per_engine_local
 
             group_abs_start = rollout_pg_offset + gpu_offset
-            needs_offload = args.offload_rollout and group_abs_start < megatron_num_gpus
+            needs_offload = args.offload_rollout and (
+                group_abs_start < megatron_num_gpus or getattr(args, "enable_timeslice", False)
+            )
             overrides = dict(group_cfg.overrides)
             if overrides_extra:
                 for k, v in overrides_extra.items():

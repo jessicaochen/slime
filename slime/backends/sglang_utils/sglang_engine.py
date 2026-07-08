@@ -182,9 +182,25 @@ class SGLangEngine(RayActor):
         _sanity_check_server_args(actual_server_args, expect_server_args)
         self._register_to_router(expect_server_args)
 
+    def _wait_server_healthy(self, timeout: int = 1800, check_interval: int = 5):
+        """Wait until SGLang engine process is responsive on /health_generate."""
+        url = f"http://{self.server_host}:{self.server_port}/health_generate"
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                response = requests.get(url, timeout=5)
+                if response.status_code == 200:
+                    logger.info(f"SGLang server at {self.server_host}:{self.server_port} is healthy.")
+                    return
+            except Exception:
+                pass
+            time.sleep(check_interval)
+        raise TimeoutError(f"SGLang server at {self.server_host}:{self.server_port} did not become healthy within {timeout}s.")
+
     def _init_normal(self, server_args_dict):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
+        self._wait_server_healthy()
         self._register_to_router(server_args_dict)
 
     def _register_to_router(self, server_args_dict):
