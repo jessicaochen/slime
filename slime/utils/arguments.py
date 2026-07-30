@@ -1541,7 +1541,6 @@ def parse_args(add_custom_arguments=None):
     # Uses ignore_unknown_args=True so that --sglang-* and pre-parsed CLI flags
     # are silently ignored by the megatron parser.
     from slime.backends.megatron_utils.arguments import megatron_parse_args
-    from slime.backends.megatron_utils.arguments import validate_args as megatron_validate_args
 
     args = megatron_parse_args(
         extra_args_provider=add_slime_arguments,
@@ -1559,8 +1558,9 @@ def parse_args(add_custom_arguments=None):
 
     slime_validate_args(args)
 
-    if pre.train_backend == "megatron" and not args.debug_rollout_only:
-        megatron_validate_args(args)
+    # Note: megatron_validate_args is intentionally deferred to the GPU worker node
+    # during actor initialization because Megatron hardware checks (such as bf16/fp16
+    # architecture validation) require direct physical access to GPU device drivers.
 
     if not args.debug_train_only:
         sglang_validate_args(args)

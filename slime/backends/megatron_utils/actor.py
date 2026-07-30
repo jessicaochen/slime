@@ -26,6 +26,7 @@ from slime.utils.types import RolloutBatch
 
 from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
+from .arguments import validate_args as megatron_validate_args
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
@@ -59,6 +60,7 @@ class MegatronTrainRayActor(TrainRayActor):
         monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
 
+        megatron_validate_args(args)
         init(args)
 
         if is_megatron_main_rank():
