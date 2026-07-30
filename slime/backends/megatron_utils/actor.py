@@ -646,6 +646,21 @@ class MegatronTrainRayActor(TrainRayActor):
             destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
+        # Note: At Step 0 of training, if the requested checkpoint path matches the active
+        # actor model checkpoint (hf_checkpoint / load), reloading from disk is totally
+        # redundant because the reference model has the exact same initial parameter state.
+        # More importantly, attempting a second consecutive HF-to-Megatron live weight
+        # conversion on the same distributed model instance triggers NCCL stream deadlocks
+        # when Megatron's persistent and parallel checkpoint workers are enabled. Bypassing
+        # redundant reloads eliminates these NCCL deadlocks and preserves memory instantly.
+        if path and (path == getattr(self.args, "hf_checkpoint", None) or path == getattr(self.args, "load", None)):
+            logger.info(
+                f"Checkpoint '{path}' for tag '{model_tag}' matches initial active checkpoint; "
+                "skipping redundant disk reload to prevent NCCL stream deadlocks."
+            )
+            self.weights_backuper.backup(model_tag)
+            return
+
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
         self.args.load = path
         self.args.no_load_optim = True
