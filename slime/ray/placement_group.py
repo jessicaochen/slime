@@ -39,13 +39,18 @@ def sort_key(x):
     return (node_ip_parts, gpu_id)
 
 
-def _create_placement_group(num_gpus):
+def _create_placement_group(num_gpus, strategy="PACK", custom_resource=None):
     """Create a placement group with the specified number of GPUs."""
     if num_gpus == 0:
         return None, [], []
 
-    bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_gpus)]
-    pg = placement_group(bundles, strategy="PACK")
+    bundles = []
+    for _ in range(num_gpus):
+        bundle = {"GPU": 1, "CPU": 1}
+        if custom_resource:
+            bundle[custom_resource] = 1
+        bundles.append(bundle)
+    pg = placement_group(bundles, strategy=strategy)
     num_bundles = len(bundles)
 
     # Wait for the placement group to be scheduled. Poll rather than a bare
@@ -120,17 +125,40 @@ def _get_placement_group_layout(args) -> tuple[int, int]:
 def create_placement_groups(args):
     """Create placement groups for actor, critic, and rollout engines."""
 
-    num_gpus, rollout_offset = _get_placement_group_layout(args)
+    strategy = getattr(args, "placement_group_strategy", "PACK")
+    actor_num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
 
-    logger.info(f"Creating placement group with {num_gpus} GPUs...")
-    pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids = _create_placement_group(num_gpus)
-    rollout_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[rollout_offset:]
-    rollout_pg_reordered_gpu_ids = actor_pg_reordered_gpu_ids[rollout_offset:]
-
-    result = {
-        "actor": (pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids),
-        "rollout": (pg, rollout_pg_reordered_bundle_indices, rollout_pg_reordered_gpu_ids),
-    }
+    if (
+        not getattr(args, "colocate", False)
+        and not getattr(args, "rollout_external", False)
+        and not getattr(args, "debug_train_only", False)
+        and not getattr(args, "debug_rollout_only", False)
+    ):
+        logger.info(
+            f"Creating separate placement groups: {actor_num_gpus} GPUs for actor/critic (trainers) and {args.rollout_num_gpus} GPUs for rollout (samplers)..."
+        )
+        actor_pg, actor_indices, actor_gpu_ids = _create_placement_group(
+            actor_num_gpus, strategy=strategy, custom_resource="trainers"
+        )
+        rollout_pg, rollout_indices, rollout_gpu_ids = _create_placement_group(
+            args.rollout_num_gpus, strategy=strategy, custom_resource="samplers"
+        )
+        result = {
+            "actor": (actor_pg, actor_indices, actor_gpu_ids),
+            "rollout": (rollout_pg, rollout_indices, rollout_gpu_ids),
+        }
+    else:
+        num_gpus, rollout_offset = _get_placement_group_layout(args)
+        logger.info(f"Creating placement group with {num_gpus} GPUs...")
+        pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids = _create_placement_group(
+            num_gpus, strategy=strategy
+        )
+        rollout_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[rollout_offset:]
+        rollout_pg_reordered_gpu_ids = actor_pg_reordered_gpu_ids[rollout_offset:]
+        result = {
+            "actor": (pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids),
+            "rollout": (pg, rollout_pg_reordered_bundle_indices, rollout_pg_reordered_gpu_ids),
+        }
 
     result["critic"] = result["actor"] if args.use_critic else None
 
