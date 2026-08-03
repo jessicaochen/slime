@@ -201,7 +201,6 @@ class MegatronTrainRayActor(TrainRayActor):
         ):
             self.weight_updater.disconnect_rollout_engines()
         destroy_process_groups()
-
         torch_memory_saver.pause()
 
         print_memory("after offload model")
@@ -212,7 +211,6 @@ class MegatronTrainRayActor(TrainRayActor):
         print_memory("before wake_up model")
 
         torch_memory_saver.resume()
-
         clear_memory()
         reload_process_groups()
         if self.role == "actor":
@@ -600,10 +598,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 logger.info("No updatable SGLang engines are running; skip weight update.")
             return
 
-        if reconnect_rollout_engines:
+        if reconnect_rollout_engines or self.args.offload_train:
             self.wake_up()
-        elif self.args.offload_train:
-            reload_process_groups()
 
         if num_new_engines > 0 or reconnect_rollout_engines:
             self.weight_updater.connect_rollout_engines(
