@@ -16,7 +16,7 @@ def train(args):
     job_id = getattr(args, "timeslice_job_id", None) or os.getenv("TIMESLICE_JOB_ID", "slime-job-default")
 
     if getattr(args, "enable_timeslice", False):
-        from timeslice import OrchestratorClient
+        from timeslice import TimeSliceOrchestratorClient as OrchestratorClient
         addr = getattr(args, "timeslice_orchestrator_addr", "timeslice-acceleratororchestrator.timeslice-system.svc.cluster.local:50051")
         sampler_group = getattr(args, "timeslice_sampler_group", "samplers")
         trainer_group = getattr(args, "timeslice_trainer_group", "trainers")
