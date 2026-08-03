@@ -122,11 +122,27 @@ def _get_placement_group_layout(args) -> tuple[int, int]:
     return actor_num_gpus + args.rollout_num_gpus, actor_num_gpus
 
 
-def create_placement_groups(args):
+def create_placement_groups(args, role=None):
     """Create placement groups for actor, critic, and rollout engines."""
 
+    enable_ts = getattr(args, "enable_timeslice", False)
     strategy = getattr(args, "placement_group_strategy", "PACK")
     actor_num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
+
+    if enable_ts:
+        result = {}
+        if role is None or role == "actor":
+            logger.info(f"[TimeSlice] Creating actor placement group with {actor_num_gpus} GPUs (custom_resource=trainers)...")
+            pg_actor = _create_placement_group(actor_num_gpus, strategy=strategy, custom_resource="trainers")
+            result["actor"] = pg_actor
+            result["critic"] = pg_actor if args.use_critic else None
+
+        if role is None or role == "rollout":
+            logger.info(f"[TimeSlice] Creating rollout placement group with {args.rollout_num_gpus} GPUs (custom_resource=samplers)...")
+            pg_rollout = _create_placement_group(args.rollout_num_gpus, strategy=strategy, custom_resource="samplers")
+            result["rollout"] = pg_rollout
+
+        return result
 
     if (
         not getattr(args, "colocate", False)
