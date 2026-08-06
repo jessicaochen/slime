@@ -598,7 +598,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 logger.info("No updatable SGLang engines are running; skip weight update.")
             return
 
-        if reconnect_rollout_engines or self.args.offload_train:
+        if self.args.offload_train:
             self.wake_up()
 
         if num_new_engines > 0 or reconnect_rollout_engines:
@@ -636,10 +636,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 else:
                     self.weights_backuper.backup("old_actor")
 
-        if reconnect_rollout_engines:
+        if self.args.offload_train:
             self.sleep()
-        elif self.args.offload_train:
-            destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
         # Note: At Step 0 of training, if the requested checkpoint path matches the active
