@@ -133,6 +133,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="group-slime-trainer",
                 help="Accelerator Orchestrator time-slice group for trainer actors.",
             )
+            parser.add_argument(
+                "--async-off-policy-limit",
+                type=int,
+                default=None,
+                help=(
+                    "Enable asynchronous rollout and training pipeline. "
+                    "0 means on-policy pipelining (1-step lookahead with zero staleness). "
+                    "N > 0 means off-policy buffer allowing up to N steps of policy staleness."
+                ),
+            )
 
             return parser
 

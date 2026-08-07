@@ -99,7 +99,105 @@ def train(args):
         if args.rollout_global_dataset:
             ray.get(rollout_manager.save.remote(rollout_id))
 
-    # train loop.
+    if args.async_off_policy_limit is not None:
+        staleness_limit = args.async_off_policy_limit
+        next_rollout_id = args.start_rollout_id
+        curr_train_id = args.start_rollout_id
+        pending_rollouts = []  # List of (rollout_id, ObjectRef)
+
+        print(f"[Async Pipeline] Starting async RL loop (start={args.start_rollout_id}, total={args.num_rollout}, staleness_limit={staleness_limit})...")
+
+        while curr_train_id < args.num_rollout:
+            # 1. Producer: submit rollout generation up to staleness_limit
+            while next_rollout_id < args.num_rollout and (next_rollout_id - curr_train_id) <= staleness_limit:
+                if args.eval_interval is not None and next_rollout_id == 0 and not args.skip_eval_before_train:
+                    ray.get(rollout_manager.eval.remote(next_rollout_id))
+
+                if sampler_client:
+                    print(f"[TimeSlice] Acquiring Sampler GPU Grant for async rollout {next_rollout_id} (job {job_id})...")
+                    sampler_client.acquire()
+
+                if args.offload_rollout:
+                    ray.get(rollout_manager.onload_weights.remote())
+                    ray.get(rollout_manager.onload_kv.remote())
+
+                print(f"[Async Pipeline] Submitting rollout {next_rollout_id} for generation...")
+                f_gen = rollout_manager.generate.remote(next_rollout_id)
+                pending_rollouts.append((next_rollout_id, f_gen))
+                next_rollout_id += 1
+
+                if (next_rollout_id - curr_train_id) > staleness_limit or next_rollout_id >= args.num_rollout:
+                    break
+
+            # 2. Consumer: wait for next ready batch
+            if not pending_rollouts:
+                if trainer_client:
+                    print(f"[TimeSlice] Yielding Trainer GPU Grant while pipeline is empty (job {job_id})...")
+                    trainer_client.release()
+                continue
+
+            r_id, f_gen = pending_rollouts.pop(0)
+            rollout_data_ref = ray.get(f_gen)
+
+            if args.offload_rollout:
+                ray.get(rollout_manager.offload.remote())
+
+            if sampler_client:
+                print(f"[TimeSlice] Yielding Sampler GPU Grant after rollout {r_id} generation (job {job_id})...")
+                sampler_client.release()
+
+            # 3. Train on the batch
+            actor_trains_this_step = (not args.use_critic) or r_id >= args.num_critic_only_steps
+
+            if trainer_client:
+                print(f"[TimeSlice] Acquiring Trainer GPU Grant for training rollout {r_id} (job {job_id})...")
+                trainer_client.acquire()
+
+            print(f"[Async Pipeline] Training on rollout {r_id}...")
+            if args.use_critic:
+                value_refs = critic_model.async_train(r_id, rollout_data_ref)
+                if actor_trains_this_step:
+                    ray.get(actor_model.async_train(r_id, rollout_data_ref, external_data=value_refs))
+                else:
+                    ray.get(value_refs)
+            else:
+                ray.get(actor_model.async_train(r_id, rollout_data_ref))
+
+            if should_run_periodic_action(r_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
+                save(r_id)
+
+            offload_train(actor_trains_this_step)
+
+            # 4. Update weights
+            if sampler_client:
+                print(f"[TimeSlice] Acquiring Sampler GPU Grant for weight update after rollout {r_id} (job {job_id})...")
+                sampler_client.acquire()
+
+            if args.offload_rollout:
+                ray.get(rollout_manager.onload_weights.remote())
+            actor_model.update_weights()
+
+            if args.offload_rollout:
+                ray.get(rollout_manager.onload_kv.remote())
+
+            if trainer_client:
+                print(f"[TimeSlice] Yielding Trainer GPU Grant after weight update for rollout {r_id} (job {job_id})...")
+                trainer_client.release()
+
+            if should_run_periodic_action(r_id, args.eval_interval, num_rollout_per_epoch):
+                ray.get(rollout_manager.eval.remote(r_id))
+
+            curr_train_id += 1
+
+        if sampler_client:
+            print(f"[TimeSlice] Releasing final Sampler GPU Grant for job {job_id}...")
+            sampler_client.release()
+
+        ray.get(rollout_manager.dispose.remote())
+        finish_tracking(args)
+        return
+
+    # train loop (synchronous fallback)
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         if args.eval_interval is not None and rollout_id == 0 and not args.skip_eval_before_train:
             ray.get(rollout_manager.eval.remote(rollout_id))
