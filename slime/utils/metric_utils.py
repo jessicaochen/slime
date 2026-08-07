@@ -61,6 +61,7 @@ def compute_statistics(values: list[float]) -> dict[str, float]:
     return {
         "mean": np.mean(values).item(),
         "median": np.median(values).item(),
+        "p95": np.percentile(values, 95).item() if len(values) > 0 else 0.0,
         "max": np.max(values).item(),
         "min": np.min(values).item(),
     }
