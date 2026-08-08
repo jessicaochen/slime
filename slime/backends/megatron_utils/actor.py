@@ -200,7 +200,6 @@ class MegatronTrainRayActor(TrainRayActor):
         # in the driver context that cause cuda-checkpoint lock to fail with "initialization error".
         if (
             self.role == "actor"
-            and self.args.use_critic
             and not self.args.colocate
             and hasattr(self.weight_updater, "disconnect_rollout_engines")
         ):
@@ -599,9 +598,7 @@ class MegatronTrainRayActor(TrainRayActor):
         # [Fix for NVLink P2P Trainer TimeSlicing]:
         # Reconnect ephemeral weight update NCCL groups for all disaggregated training workloads
         # (including critic-free GRPO) where rollout engines were disconnected during sleep().
-        reconnect_rollout_engines = (
-            self.args.offload_train and self.args.use_critic and not self.args.colocate
-        )
+        reconnect_rollout_engines = self.args.offload_train and not self.args.colocate
 
         if not rollout_engines and not reconnect_rollout_engines:
             if dist.get_rank() == 0:
