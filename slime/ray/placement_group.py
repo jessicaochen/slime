@@ -71,6 +71,22 @@ def _create_placement_group(num_gpus, strategy="PACK", custom_resource=None):
             f"{total:g} GPUs registered with Ray, {available:g} available."
         )
 
+    # [Fix for TimeSlicing and cuda-checkpoint]:
+    # In TimeSlicing mode where custom_resource is passed (e.g. "trainers" or "samplers"),
+    # all bundles are allocated locally on the assigned dedicated GPU node with standard contiguous
+    # GPU indices (0..num_bundles-1). Spawning temporary InfoActors and killing them leaves idle
+    # Ray worker processes in the pool that initialized CUDA. When cuda-checkpoint snapshot runs,
+    # those un-shimmed idle processes cause "initialization error".
+    # Directly mapping bundles 0..num_bundles-1 avoids spawning transient worker processes entirely.
+    if custom_resource:
+        pg_reordered_bundle_indices = list(range(num_bundles))
+        pg_reordered_gpu_ids = [str(i) for i in range(num_bundles)]
+        for i in range(num_bundles):
+            logger.info(
+                f"  [TimeSlicing local PG] bundle {i:4}, actual_bundle_index: {i:4}, gpu: {i}"
+            )
+        return pg, pg_reordered_bundle_indices, pg_reordered_gpu_ids
+
     # use info actor to get the GPU id
     info_actors = []
     for i in range(num_bundles):

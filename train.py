@@ -168,20 +168,24 @@ def train(args):
 
             offload_train(actor_trains_this_step)
 
-            # 4. Update weights
-            if sampler_client:
-                print(f"[TimeSlice] Acquiring Sampler GPU Grant for weight update after rollout {r_id} (job {job_id})...")
-                sampler_client.acquire()
+            # 4. Update weights (skip on final rollout to eliminate terminal stalls)
+            if curr_train_id < args.num_rollout - 1:
+                if sampler_client:
+                    print(f"[TimeSlice] Acquiring Sampler GPU Grant for weight update after rollout {r_id} (job {job_id})...")
+                    sampler_client.acquire()
 
-            if args.offload_rollout:
-                ray.get(rollout_manager.onload_weights.remote())
-            actor_model.update_weights()
+                if args.offload_rollout:
+                    ray.get(rollout_manager.onload_weights.remote())
+                actor_model.update_weights()
 
-            if args.offload_rollout:
-                ray.get(rollout_manager.onload_kv.remote())
+                if args.offload_rollout:
+                    ray.get(rollout_manager.onload_kv.remote())
+
+                if sampler_client:
+                    sampler_client.release()
 
             if trainer_client:
-                print(f"[TimeSlice] Yielding Trainer GPU Grant after weight update for rollout {r_id} (job {job_id})...")
+                print(f"[TimeSlice] Yielding Trainer GPU Grant after training rollout {r_id} (job {job_id})...")
                 trainer_client.release()
 
             if should_run_periodic_action(r_id, args.eval_interval, num_rollout_per_epoch):
@@ -231,20 +235,26 @@ def train(args):
 
         offload_train(actor_trains_this_step)
 
-        if sampler_client:
-            print(f"[TimeSlice] Acquiring Sampler GPU Grant for weight update (job {job_id})...")
-            sampler_client.acquire()
+        # Skip weight broadcast on the final iteration (no more rollouts will be generated)
+        if rollout_id < args.num_rollout - 1:
+            if sampler_client:
+                print(f"[TimeSlice] Acquiring Sampler GPU Grant for weight update (job {job_id})...")
+                sampler_client.acquire()
 
-        if args.offload_rollout:
-            ray.get(rollout_manager.onload_weights.remote())
-        actor_model.update_weights()
+            if args.offload_rollout:
+                ray.get(rollout_manager.onload_weights.remote())
+            actor_model.update_weights()
 
-        if args.offload_rollout:
-            ray.get(rollout_manager.onload_kv.remote())
+            if args.offload_rollout:
+                ray.get(rollout_manager.onload_kv.remote())
 
-        if trainer_client:
-            print(f"[TimeSlice] Yielding Trainer GPU Grant after weight update for job {job_id}...")
-            trainer_client.release()
+            if trainer_client:
+                print(f"[TimeSlice] Yielding Trainer GPU Grant after weight update for job {job_id}...")
+                trainer_client.release()
+        else:
+            if trainer_client:
+                print(f"[TimeSlice] Yielding final Trainer GPU Grant after training completion for job {job_id}...")
+                trainer_client.release()
 
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))

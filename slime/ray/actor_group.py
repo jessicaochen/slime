@@ -79,7 +79,19 @@ class RayTrainGroup:
                     "Cannot find torch_memory_saver dynamic library. Please make sure torch_memory_saver is properly installed."
                 )
 
-            env_vars["LD_PRELOAD"] = dynlib_path
+            # [Fix for NVLink P2P Trainer TimeSlicing]:
+            # Preserve libcr-shim in LD_PRELOAD alongside torch_memory_saver so dynamic
+            # linker PLT interposition works at worker process spawn.
+            shim_candidates = [
+                p for p in ("/opt/shim/libcr-shim-v2.so", "/tmp/libcr-shim-v2.so") if os.path.exists(p)
+            ]
+            existing_preload = os.environ.get("LD_PRELOAD", "")
+            if shim_candidates:
+                env_vars["LD_PRELOAD"] = f"{shim_candidates[0]}:{dynlib_path}"
+            elif "libcr-shim" in existing_preload:
+                env_vars["LD_PRELOAD"] = f"{existing_preload}:{dynlib_path}"
+            else:
+                env_vars["LD_PRELOAD"] = dynlib_path
             env_vars["TMS_INIT_ENABLE"] = "1"
             env_vars["TMS_INIT_ENABLE_CPU_BACKUP"] = "1"
 

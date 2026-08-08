@@ -30,7 +30,32 @@ RAY_DEFAULT_ENV_VARS = {
 
 
 def add_default_ray_env_vars(env_vars: dict[str, str] | None = None) -> dict[str, str]:
-    return RAY_DEFAULT_ENV_VARS | (env_vars or {})
+    # NVLink P2P & NCCL C/R Shim v2: Inherit LD_PRELOAD and NCCL configuration into Ray worker actors
+    inherited = {}
+    for key in (
+        "LD_PRELOAD",
+        "NCCL_NVLS_ENABLE",
+        "NCCL_DEBUG",
+        "TORCH_NCCL_RETHROW_CUDA_ERRORS",
+        "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC",
+        "NCCL_WATCHDOG_TIMEOUT_SEC",
+        "CUDA_DEVICE_MAX_CONNECTIONS",
+        "TORCH_NCCL_USE_COMM_SPLIT",
+        "ENABLE_TIMESLICE",
+        "JOB_NAME",
+    ):
+        if key in os.environ:
+            inherited[key] = os.environ[key]
+
+    merged = RAY_DEFAULT_ENV_VARS | inherited | (env_vars or {})
+    # For TimeSlicing, ensure libcr-shim is preserved in LD_PRELOAD for full PLT symbol interposition
+    if "LD_PRELOAD" in inherited and "libcr-shim" in inherited["LD_PRELOAD"]:
+        shim_lib = [p for p in inherited["LD_PRELOAD"].split(":") if "libcr-shim" in p][0]
+        cur_preload = merged.get("LD_PRELOAD", "")
+        if shim_lib not in cur_preload:
+            merged["LD_PRELOAD"] = f"{shim_lib}:{cur_preload}" if cur_preload else shim_lib
+
+    return merged
 
 
 def ray_noset_visible_devices(env_vars=os.environ):

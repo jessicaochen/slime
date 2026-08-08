@@ -42,6 +42,7 @@ class TrainRayActor(RayActor):
         os.environ["MASTER_PORT"] = str(self.master_port)
         os.environ["WORLD_SIZE"] = str(self._world_size)
         os.environ["RANK"] = str(self._rank)
+
         # TODO: currently this doesn't work as ray has already set torch.cuda.device_count().
         # os.environ.pop("CUDA_VISIBLE_DEVICES", None)
         # os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0])
@@ -56,7 +57,11 @@ class TrainRayActor(RayActor):
         torch.serialization.add_safe_globals([slime.utils.eval_config.EvalDatasetConfig])
 
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        torch.cuda.set_device(f"cuda:{local_rank}")
+        # In Ray actor processes where CUDA_VISIBLE_DEVICES is isolated to a single GPU,
+        # torch.cuda.device_count() is 1 and setting cuda:local_rank (>0) causes an invalid device ordinal error.
+        # Ensure device ordinal is within the visible GPU bounds.
+        device_id = local_rank if torch.cuda.device_count() > local_rank else 0
+        torch.cuda.set_device(f"cuda:{device_id}")
 
         backend = args.distributed_backend
 

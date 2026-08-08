@@ -193,6 +193,11 @@ class MegatronTrainRayActor(TrainRayActor):
 
         clear_memory(clear_host_memory=True)
         print_memory("before offload model")
+        # [Fix for NVLink P2P Trainer TimeSlicing]:
+        # Disconnect cross-role weight update NCCL groups whenever training is offloaded in
+        # disaggregated setups (both critic and critic-free/GRPO). Leaving cross-process NCCL
+        # communicators open between Trainer and Sampler ranks creates dangling CUDA IPC mappings
+        # in the driver context that cause cuda-checkpoint lock to fail with "initialization error".
         if (
             self.role == "actor"
             and self.args.use_critic
@@ -591,7 +596,12 @@ class MegatronTrainRayActor(TrainRayActor):
             self.rollout_manager.get_updatable_engines_and_lock.remote()
         )
 
-        reconnect_rollout_engines = self.args.offload_train and self.args.use_critic and not self.args.colocate
+        # [Fix for NVLink P2P Trainer TimeSlicing]:
+        # Reconnect ephemeral weight update NCCL groups for all disaggregated training workloads
+        # (including critic-free GRPO) where rollout engines were disconnected during sleep().
+        reconnect_rollout_engines = (
+            self.args.offload_train and self.args.use_critic and not self.args.colocate
+        )
 
         if not rollout_engines and not reconnect_rollout_engines:
             if dist.get_rank() == 0:
