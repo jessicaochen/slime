@@ -1,6 +1,7 @@
 import importlib
+import statistics
 import subprocess
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -124,6 +125,27 @@ def should_run_periodic_action(
 
     step = rollout_id + 1
     return (step % interval == 0) or (num_rollout_per_epoch is not None and step % num_rollout_per_epoch == 0)
+
+
+class RewardConvergenceDetector:
+    """Detect reward convergence over a rolling window of rollout steps.
+
+    Feed the per-step mean reward via ``update``; it returns True once the
+    window is full and the standard deviation of the rewards within it drops
+    below ``threshold``.
+    """
+
+    def __init__(self, window_size: int, threshold: float):
+        self.window: deque[float] = deque(maxlen=window_size)
+        self.threshold = threshold
+        self.last_std: float | None = None
+
+    def update(self, reward: float) -> bool:
+        self.window.append(reward)
+        if len(self.window) < self.window.maxlen:
+            return False
+        self.last_std = statistics.pstdev(self.window)
+        return self.last_std < self.threshold
 
 
 class Box:

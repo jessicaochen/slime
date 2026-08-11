@@ -631,6 +631,27 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
 
             parser.add_argument(
+                "--early-stop-window",
+                type=int,
+                default=None,
+                help=(
+                    "Rolling window size (in rollout steps) for reward-convergence early stopping. "
+                    "When set, training stops once the standard deviation of the per-step mean raw reward "
+                    "over the last N steps drops below --early-stop-threshold."
+                ),
+            )
+            parser.add_argument(
+                "--early-stop-threshold",
+                type=float,
+                default=0.01,
+                help=(
+                    "Convergence threshold for early stopping: training stops when the standard deviation "
+                    "of per-step mean raw rewards within --early-stop-window steps falls below this value. "
+                    "Only used when --early-stop-window is set."
+                ),
+            )
+
+            parser.add_argument(
                 "--disable-rollout-global-dataset",
                 action="store_false",
                 dest="rollout_global_dataset",
@@ -1863,6 +1884,10 @@ def slime_validate_args(args):
 
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
+
+    if args.early_stop_window is not None:
+        assert args.early_stop_window >= 2, "--early-stop-window must be >= 2 to compute a standard deviation."
+        assert args.early_stop_threshold >= 0, "--early-stop-threshold must be non-negative."
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 

@@ -461,6 +461,7 @@ class RolloutManager:
             runtime_env={"env_vars": add_default_ray_env_vars()},
         ).remote()
         self.rollout_id = -1
+        self._rollout_reward_means: dict[int, float] = {}
 
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
@@ -550,6 +551,9 @@ class RolloutManager:
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
+        if self.args.early_stop_window is not None:
+            rewards = [sample.get_reward_value(self.args) for sample in data]
+            self._rollout_reward_means[rollout_id] = sum(rewards) / len(rewards) if rewards else 0.0
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
         _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
         if self.args.debug_rollout_only:
@@ -557,6 +561,10 @@ class RolloutManager:
             return
         data = self._convert_samples_to_train_data(data)
         return self._split_train_data_by_dp(data)
+
+    def get_rollout_reward_mean(self, rollout_id):
+        """Return (and drop) the mean raw reward of a completed rollout step."""
+        return self._rollout_reward_means.pop(rollout_id)
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:

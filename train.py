@@ -1,10 +1,11 @@
+import atexit
 import os
 import ray
 
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import configure_logger, finish_tracking, init_tracking
-from slime.utils.misc import should_run_periodic_action
+from slime.utils.misc import RewardConvergenceDetector, should_run_periodic_action
 
 
 def train(args):
@@ -24,6 +25,18 @@ def train(args):
         print(f"[TimeSlice] Initializing OrchestratorClient (addr={addr}, job_id={job_id})...")
         sampler_client = OrchestratorClient(target=addr, job_id=job_id, group_id=sampler_group)
         trainer_client = OrchestratorClient(target=addr, job_id=job_id, group_id=trainer_group)
+
+        # Safety net: never exit (early stop, exception, sys.exit) while holding a
+        # GPU grant, or every other job in the group blocks forever in acquire().
+        # release() is idempotent, so releasing an already-yielded grant is a no-op.
+        def _release_grants_at_exit():
+            for role, client in (("Sampler", sampler_client), ("Trainer", trainer_client)):
+                try:
+                    client.release()
+                except Exception as e:
+                    print(f"[TimeSlice] Failed to release {role} GPU Grant at exit: {e}")
+
+        atexit.register(_release_grants_at_exit)
 
     if trainer_client is not None:
         print("[TimeSlice] Acquiring Trainer GPU Grant before placement group allocation...")
@@ -84,20 +97,39 @@ def train(args):
             else:
                 critic_model.clear_memory()
 
-    def save(rollout_id):
+    def save(rollout_id, force_sync=False):
+        force_sync = force_sync or rollout_id == args.num_rollout - 1
         actor_trains_this_step = (not args.use_critic) or rollout_id >= args.num_critic_only_steps
         if actor_trains_this_step:
             actor_model.save_model(
                 rollout_id,
-                force_sync=rollout_id == args.num_rollout - 1,
+                force_sync=force_sync,
             )
         if args.use_critic:
             critic_model.save_model(
                 rollout_id,
-                force_sync=rollout_id == args.num_rollout - 1,
+                force_sync=force_sync,
             )
         if args.rollout_global_dataset:
             ray.get(rollout_manager.save.remote(rollout_id))
+
+    convergence_detector = None
+    if args.early_stop_window is not None:
+        convergence_detector = RewardConvergenceDetector(args.early_stop_window, args.early_stop_threshold)
+
+    def check_convergence(rollout_id):
+        """Feed this step's mean reward to the detector; True means stop training."""
+        if convergence_detector is None:
+            return False
+        reward_mean = ray.get(rollout_manager.get_rollout_reward_mean.remote(rollout_id))
+        if not convergence_detector.update(reward_mean):
+            return False
+        print(
+            f"[Early Stop] Reward converged at rollout {rollout_id}: "
+            f"std {convergence_detector.last_std:.6f} < {args.early_stop_threshold} "
+            f"over the last {args.early_stop_window} steps."
+        )
+        return True
 
     if args.async_off_policy_limit is not None:
         staleness_limit = args.async_off_policy_limit
@@ -163,13 +195,17 @@ def train(args):
             else:
                 ray.get(actor_model.async_train(r_id, rollout_data_ref))
 
-            if should_run_periodic_action(r_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
-                save(r_id)
+            converged = check_convergence(r_id)
+
+            if should_run_periodic_action(r_id, args.save_interval, num_rollout_per_epoch, args.num_rollout) or (
+                converged and args.save_interval is not None
+            ):
+                save(r_id, force_sync=converged)
 
             offload_train(actor_trains_this_step)
 
             # 4. Update weights (skip on final rollout to eliminate terminal stalls)
-            if curr_train_id < args.num_rollout - 1:
+            if not converged and curr_train_id < args.num_rollout - 1:
                 if sampler_client:
                     print(f"[TimeSlice] Acquiring Sampler GPU Grant for weight update after rollout {r_id} (job {job_id})...")
                     sampler_client.acquire()
@@ -188,10 +224,25 @@ def train(args):
                 print(f"[TimeSlice] Yielding Trainer GPU Grant after training rollout {r_id} (job {job_id})...")
                 trainer_client.release()
 
-            if should_run_periodic_action(r_id, args.eval_interval, num_rollout_per_epoch):
+            if not converged and should_run_periodic_action(r_id, args.eval_interval, num_rollout_per_epoch):
                 ray.get(rollout_manager.eval.remote(r_id))
 
             curr_train_id += 1
+
+            if converged:
+                # Drain in-flight generations before shutdown. The trainer grant is
+                # already released above; re-acquire only the sampler grant so the
+                # paused engines can finish (never hold both grants here, keeping
+                # the global trainer->sampler acquisition order).
+                if pending_rollouts:
+                    if sampler_client:
+                        print(f"[TimeSlice] Acquiring Sampler GPU Grant to drain pending rollouts (job {job_id})...")
+                        sampler_client.acquire()
+                    for p_id, p_gen in pending_rollouts:
+                        print(f"[Early Stop] Draining pending rollout {p_id} (result discarded)...")
+                        ray.get(p_gen)
+                    pending_rollouts.clear()
+                break
 
         if sampler_client:
             print(f"[TimeSlice] Releasing final Sampler GPU Grant for job {job_id}...")
@@ -230,13 +281,17 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
-        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
-            save(rollout_id)
+        converged = check_convergence(rollout_id)
+
+        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout) or (
+            converged and args.save_interval is not None
+        ):
+            save(rollout_id, force_sync=converged)
 
         offload_train(actor_trains_this_step)
 
         # Skip weight broadcast on the final iteration (no more rollouts will be generated)
-        if rollout_id < args.num_rollout - 1:
+        if not converged and rollout_id < args.num_rollout - 1:
             if sampler_client:
                 print(f"[TimeSlice] Acquiring Sampler GPU Grant for weight update (job {job_id})...")
                 sampler_client.acquire()
@@ -256,8 +311,14 @@ def train(args):
                 print(f"[TimeSlice] Yielding final Trainer GPU Grant after training completion for job {job_id}...")
                 trainer_client.release()
 
-        if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
+        if not converged and should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))
+
+        if converged:
+            # The trainer grant was released above (the not-converged weight-update
+            # branch was skipped); the sampler grant was released after generate.
+            # The release below is an idempotent no-op, matching normal completion.
+            break
 
     if sampler_client:
         print(f"[TimeSlice] Releasing final Sampler GPU Grant for job {job_id}...")
