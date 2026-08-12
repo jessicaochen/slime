@@ -1,3 +1,4 @@
+import gc
 import logging
 import os
 from contextlib import contextmanager
@@ -172,6 +173,7 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
 
             del reloadable_group.group
             reloadable_group.group = None
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.synchronize()
 

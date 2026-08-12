@@ -1,3 +1,4 @@
+import gc
 import logging
 import os
 import random
@@ -207,6 +208,7 @@ class MegatronTrainRayActor(TrainRayActor):
         ):
             self.weight_updater.disconnect_rollout_engines()
         destroy_process_groups()
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         torch_memory_saver.pause()
