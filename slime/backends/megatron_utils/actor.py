@@ -18,7 +18,7 @@ from slime.utils import train_dump_utils
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.logging_utils import init_tracking
-from slime.utils.memory_utils import clear_memory, print_memory
+from slime.utils.memory_utils import clear_memory, log_process_diagnostics, print_memory
 from slime.utils.misc import Box
 from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
 from slime.utils.routing_replay import RoutingReplay
@@ -214,6 +214,7 @@ class MegatronTrainRayActor(TrainRayActor):
         torch_memory_saver.pause()
 
         print_memory("after offload model")
+        log_process_diagnostics("after_sleep")
 
     @timer
     def wake_up(self) -> None:
