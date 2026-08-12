@@ -191,6 +191,8 @@ class MegatronTrainRayActor(TrainRayActor):
     def sleep(self) -> None:
         assert self.args.offload_train
 
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         clear_memory(clear_host_memory=True)
         print_memory("before offload model")
         # [Fix for NVLink P2P Trainer TimeSlicing]:
@@ -205,6 +207,8 @@ class MegatronTrainRayActor(TrainRayActor):
         ):
             self.weight_updater.disconnect_rollout_engines()
         destroy_process_groups()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         torch_memory_saver.pause()
 
         print_memory("after offload model")

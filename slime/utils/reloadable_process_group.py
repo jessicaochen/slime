@@ -54,9 +54,6 @@ def monkey_patch_torch_dist():
             # If no ranks specified, use all ranks in world
             ranks = list(range(dist.get_world_size()))
 
-        if len(ranks) == 1:
-            return group
-
         group = ReloadableProcessGroup(group, ranks)
         return group
 
@@ -160,12 +157,14 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
     @staticmethod
     def destroy_process_groups():
         pid = os.getpid()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         for reloadable_group in ReloadableProcessGroup.GROUPS.get(pid, []):
             if reloadable_group.group is None:
                 continue
             try:
                 dist.destroy_process_group(reloadable_group.group)
-            except ValueError as e:
+            except (ValueError, RuntimeError) as e:
                 logger.warning(
                     f"Process group already invalid/destroyed; skipping cleanup. Exception: {e}",
                     exc_info=True,
@@ -173,6 +172,8 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
 
             del reloadable_group.group
             reloadable_group.group = None
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
     @staticmethod
     def reload_process_groups():
