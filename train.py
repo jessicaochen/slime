@@ -115,7 +115,9 @@ def train(args):
 
     convergence_detector = None
     if args.early_stop_window is not None:
-        convergence_detector = RewardConvergenceDetector(args.early_stop_window, args.early_stop_threshold)
+        convergence_detector = RewardConvergenceDetector(
+            args.early_stop_window, args.early_stop_threshold, min_reward=args.early_stop_min_reward
+        )
 
     def check_convergence(rollout_id):
         """Feed this step's mean reward to the detector; True means stop training."""
@@ -124,9 +126,10 @@ def train(args):
         reward_mean = ray.get(rollout_manager.get_rollout_reward_mean.remote(rollout_id))
         if not convergence_detector.update(reward_mean):
             return False
+        min_msg = f" (mean {convergence_detector.last_mean:.4f} >= {args.early_stop_min_reward})" if args.early_stop_min_reward is not None else ""
         print(
             f"[Early Stop] Reward converged at rollout {rollout_id}: "
-            f"std {convergence_detector.last_std:.6f} < {args.early_stop_threshold} "
+            f"std {convergence_detector.last_std:.6f} < {args.early_stop_threshold}{min_msg} "
             f"over the last {args.early_stop_window} steps."
         )
         return True

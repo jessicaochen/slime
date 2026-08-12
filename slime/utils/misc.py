@@ -131,21 +131,29 @@ class RewardConvergenceDetector:
     """Detect reward convergence over a rolling window of rollout steps.
 
     Feed the per-step mean reward via ``update``; it returns True once the
-    window is full and the standard deviation of the rewards within it drops
-    below ``threshold``.
+    window is full, the standard deviation of the rewards within it drops
+    below ``threshold``, AND the window's mean reward is >= ``min_reward``
+    (if ``min_reward`` is configured).
     """
 
-    def __init__(self, window_size: int, threshold: float):
+    def __init__(self, window_size: int, threshold: float, min_reward: float | None = None):
         self.window: deque[float] = deque(maxlen=window_size)
         self.threshold = threshold
+        self.min_reward = min_reward
         self.last_std: float | None = None
+        self.last_mean: float | None = None
 
     def update(self, reward: float) -> bool:
         self.window.append(reward)
         if len(self.window) < self.window.maxlen:
             return False
         self.last_std = statistics.pstdev(self.window)
-        return self.last_std < self.threshold
+        self.last_mean = statistics.mean(self.window)
+        if self.last_std >= self.threshold:
+            return False
+        if self.min_reward is not None and self.last_mean < self.min_reward:
+            return False
+        return True
 
 
 class Box:

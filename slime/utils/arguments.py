@@ -650,6 +650,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Only used when --early-stop-window is set."
                 ),
             )
+            parser.add_argument(
+                "--early-stop-min-reward",
+                type=float,
+                default=None,
+                help=(
+                    "Minimum average reward required in the rolling window for early convergence stop. "
+                    "Prevents early stopping when rewards stagnate at zero before initial learning occurs. "
+                    "Only used when --early-stop-window is set."
+                ),
+            )
 
             parser.add_argument(
                 "--disable-rollout-global-dataset",
