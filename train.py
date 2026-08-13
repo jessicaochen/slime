@@ -73,6 +73,8 @@ def train(args):
 
     # Always push actor weights to rollout once weights are loaded.
     actor_model.update_weights()
+    if args.offload_train:
+        actor_model.offload()
 
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))
@@ -220,6 +222,8 @@ def train(args):
                 if args.offload_rollout:
                     ray.get(rollout_manager.onload_weights.remote())
                 actor_model.update_weights()
+                if args.offload_train:
+                    actor_model.offload()
 
                 if args.offload_rollout:
                     ray.get(rollout_manager.onload_kv.remote())
@@ -314,6 +318,8 @@ def train(args):
             if args.offload_rollout:
                 ray.get(rollout_manager.onload_weights.remote())
             actor_model.update_weights()
+            if args.offload_train:
+                actor_model.offload()
 
             if args.offload_rollout:
                 ray.get(rollout_manager.onload_kv.remote())
