@@ -163,11 +163,13 @@ def _next_actor():
 
 
 async def _post(client, url, payload, max_retries=60, headers=None):
+    req_headers = dict(headers) if headers else {}
+    req_headers.setdefault("Connection", "close")
     retry_count = 0
     while retry_count < max_retries:
         response = None
         try:
-            response = await client.post(url, json=payload or {}, headers=headers)
+            response = await client.post(url, json=payload or {}, headers=req_headers)
             response.raise_for_status()
             content = await response.aread()
             try:
@@ -220,9 +222,14 @@ def init_http_client(args):
     _client_concurrency = args.sglang_server_concurrency * num_engines
     if _http_client is None:
         _http_client = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=_client_concurrency),
+            limits=httpx.Limits(
+                max_connections=_client_concurrency,
+                max_keepalive_connections=0,
+                keepalive_expiry=0.0,
+            ),
             timeout=httpx.Timeout(None),
             trust_env=False,  # internal SGLang comm only — never route through system proxy
+            headers={"Connection": "close"},
         )
 
     # Optionally initialize distributed POST via Ray without changing interfaces
@@ -257,9 +264,14 @@ def _init_ray_distributed_post(args):
         def __init__(self, concurrency: int):
             # Lazy creation to this actor's event loop
             self._client = httpx.AsyncClient(
-                limits=httpx.Limits(max_connections=max(1, concurrency)),
+                limits=httpx.Limits(
+                    max_connections=max(1, concurrency),
+                    max_keepalive_connections=0,
+                    keepalive_expiry=0.0,
+                ),
                 timeout=httpx.Timeout(None),
                 trust_env=False,  # internal SGLang comm only — never route through system proxy
+                headers={"Connection": "close"},
             )
 
         async def do_post(self, url, payload, max_retries=60, headers=None):
@@ -309,9 +321,19 @@ async def post(url, payload, max_retries=60, headers=None):
     return await _post(_http_client, url, payload, max_retries, headers=headers)
 
 
-async def get(url):
-    response = await _http_client.get(url)
-    response.raise_for_status()
-    content = await response.aread()
-    output = json.loads(content)
-    return output
+async def get(url, headers=None):
+    req_headers = dict(headers) if headers else {}
+    req_headers.setdefault("Connection", "close")
+    response = None
+    try:
+        response = await _http_client.get(url, headers=req_headers)
+        response.raise_for_status()
+        content = await response.aread()
+        try:
+            output = json.loads(content)
+        except json.JSONDecodeError:
+            output = content.decode() if isinstance(content, bytes) else content
+        return output
+    finally:
+        if response is not None:
+            await response.aclose()
