@@ -78,11 +78,7 @@ def train(args):
         ray.get(rollout_manager.check_weights.remote(action="compare"))
 
     if args.offload_rollout:
-        ray.get(rollout_manager.offload.remote())
-
-    if sampler_client is not None:
-        print("[TimeSlice] Yielding Sampler GPU Grant after initial weight sync.")
-        sampler_client.release()
+        ray.get(rollout_manager.onload_kv.remote())
 
     if trainer_client is not None:
         print("[TimeSlice] Yielding Trainer GPU Grant after initial weight sync.")
@@ -264,21 +260,13 @@ def train(args):
         if args.eval_interval is not None and rollout_id == 0 and not args.skip_eval_before_train:
             ray.get(rollout_manager.eval.remote(rollout_id))
 
-        if sampler_client:
-            print(f"[TimeSlice] Acquiring Sampler GPU Grant for rollout {rollout_id} (job {job_id})...")
-            sampler_client.acquire()
-
-        if args.offload_rollout:
-            ray.get(rollout_manager.onload_weights.remote())
-            ray.get(rollout_manager.onload_kv.remote())
-
         rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
 
         if args.offload_rollout:
             ray.get(rollout_manager.offload.remote())
 
         if sampler_client:
-            print(f"[TimeSlice] Yielding Sampler GPU Grant after rollout {rollout_id} for job {job_id}...")
+            print(f"[TimeSlice] Yielding Sampler GPU Grant for job {job_id}...")
             sampler_client.release()
 
         actor_trains_this_step = (not args.use_critic) or rollout_id >= args.num_critic_only_steps
@@ -317,10 +305,6 @@ def train(args):
 
             if args.offload_rollout:
                 ray.get(rollout_manager.onload_kv.remote())
-
-            if sampler_client:
-                print(f"[TimeSlice] Yielding Sampler GPU Grant after weight update for job {job_id}...")
-                sampler_client.release()
 
             if trainer_client:
                 print(f"[TimeSlice] Yielding Trainer GPU Grant after weight update for job {job_id}...")
